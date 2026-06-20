@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="ProjectModuleManager">
+    <modules>
+      <module fileurl="file://$PROJECT_DIR$/.idea/Veltryx-Tauri.iml" filepath="$PROJECT_DIR$/.idea/Veltryx-Tauri.iml" />
+      <module fileurl="file://$USER_HOME$/GolandProjects/pc_local/.idea/pc_local.iml" filepath="$USER_HOME$/GolandProjects/pc_local/.idea/pc_local.iml" />
+    </modules>
+  </component>
+</project>

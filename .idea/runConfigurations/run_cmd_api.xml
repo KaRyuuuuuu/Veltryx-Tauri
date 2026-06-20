@@ -1,0 +1,11 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="run cmd-api" type="GoApplicationRunConfiguration" factoryName="Go Application" singleton="false">
+    <module name="Veltryx-Tauri" />
+    <working_directory value="$PROJECT_DIR$" />
+    <kind value="DIRECTORY" />
+    <package value="veltryx/cmd/api" />
+    <directory value="$PROJECT_DIR$/cmd/api" />
+    <filePath value="$PROJECT_DIR$/cmd/api/main.go" />
+    <method v="2" />
+  </configuration>
+</component>
