@@ -246,7 +246,12 @@ async fn read_json_or_text(response: reqwest::Response) -> Result<Value, String>
     }
 }
 
-async fn website_post(client: &Client, base_url: &str, path: &str, payload: Value) -> Result<Value, String> {
+async fn website_post(
+    client: &Client,
+    base_url: &str,
+    path: &str,
+    payload: Value,
+) -> Result<Value, String> {
     let response = client
         .post(format!("{base_url}{path}"))
         .json(&payload)
@@ -293,7 +298,13 @@ fn identity_from_profile(payload: &Value) -> Option<DesktopIdentity> {
     let name = user
         .get("name")
         .and_then(Value::as_str)
-        .unwrap_or_else(|| if username.is_empty() { "Desktop user" } else { username.as_str() })
+        .unwrap_or_else(|| {
+            if username.is_empty() {
+                "Desktop user"
+            } else {
+                username.as_str()
+            }
+        })
         .to_string();
     let id = user
         .get("id")
@@ -325,6 +336,36 @@ fn desktop_permissions_from_role(role: &str) -> Vec<String> {
         ],
         "admin" => vec!["desktop:control".to_string(), "desktop:view".to_string()],
         _ => vec!["desktop:view".to_string()],
+    }
+}
+
+fn local_operator_identity() -> DesktopIdentity {
+    DesktopIdentity {
+        id: "local-operator".to_string(),
+        username: "local".to_string(),
+        email: String::new(),
+        name: "Local operator".to_string(),
+        role: "super_admin".to_string(),
+        tenant_id: None,
+        permissions: vec![
+            "websocket_access",
+            "view_live_timing",
+            "view_map",
+            "view_sectors",
+            "view_flags",
+            "view_reports",
+            "control_flags",
+            "control_global_flags",
+            "control_sector_flags",
+            "x2_connection",
+            "view_logs",
+            "manage_users",
+            "manage_events",
+            "system_settings",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect(),
     }
 }
 
@@ -484,7 +525,8 @@ fn ensure_embedded_backend<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     state: &State<'_, AppState>,
 ) -> Result<(), String> {
-    if cfg!(debug_assertions) || state.backend_url != DEFAULT_BACKEND_URL || is_backend_available() {
+    if cfg!(debug_assertions) || state.backend_url != DEFAULT_BACKEND_URL || is_backend_available()
+    {
         return Ok(());
     }
 
@@ -800,7 +842,11 @@ async fn set_global_flag(state: State<'_, AppState>, flag: i32) -> Result<Value,
 }
 
 #[tauri::command]
-async fn set_sector_flag(state: State<'_, AppState>, sector_id: i32, flag: i32) -> Result<Value, String> {
+async fn set_sector_flag(
+    state: State<'_, AppState>,
+    sector_id: i32,
+    flag: i32,
+) -> Result<Value, String> {
     backend_post_value(
         &state.backend,
         &state.backend_url,
@@ -838,7 +884,10 @@ async fn send_tms_can(
     }
     let payload = data;
 
-    let targets = [primary_can_id.or(state.tms_primary_can_id), test_can_id.or(state.tms_test_can_id)];
+    let targets = [
+        primary_can_id.or(state.tms_primary_can_id),
+        test_can_id.or(state.tms_test_can_id),
+    ];
     let target_ids = targets
         .into_iter()
         .flatten()
@@ -900,71 +949,11 @@ async fn get_x2_status(state: State<'_, AppState>) -> Result<Value, String> {
 
 #[tauri::command]
 async fn bootstrap_desktop_session(state: State<'_, AppState>) -> Result<Value, String> {
-    let key = load_or_create_key(&state.cache_paths)?;
-    let device_id = device_id_from_key(&key);
-    let cached = match load_cached_session(&state.cache_paths)? {
-        Some(cached) => cached,
-        None => {
-            return Ok(json!({
-                "authenticated": false,
-                "user": null,
-            }))
-        }
-    };
-
-    if cached.device_id != device_id || cached.expires_at <= now_epoch() {
-        let _ = clear_cached_session(&state.cache_paths);
-        return Ok(json!({
-            "authenticated": false,
-            "user": null,
-        }));
+    let identity = local_operator_identity();
+    if let Ok(mut current) = state.profile.lock() {
+        *current = Some(identity.clone());
     }
-
-    match validate_remote_session(&state, &cached, &device_id).await {
-        Ok(response) if response.valid => {
-            let identity = match &response.user {
-                Some(user) => DesktopIdentity {
-                    id: user.id.clone(),
-                    username: user.username.clone(),
-                    email: user.email.clone(),
-                    name: user.name.clone(),
-                    role: user.role.clone(),
-                    tenant_id: user.tenant_id.clone(),
-                    permissions: user.permissions.clone(),
-                },
-                None => {
-                    let _ = clear_cached_session(&state.cache_paths);
-                    return Ok(json!({"authenticated": false, "user": null}));
-                }
-            };
-
-            let refreshed = build_cached_session(
-                cached.session_id.clone(),
-                cached.event_id,
-                identity.clone(),
-                &response,
-                device_id,
-            );
-            encrypt_session(&state.cache_paths, &refreshed)?;
-            if let Ok(mut current) = state.profile.lock() {
-                *current = Some(identity.clone());
-            }
-            if let Ok(mut key_guard) = state.session_key.lock() {
-                *key_guard = refreshed.session_id.clone();
-            }
-            Ok(profile_value(&identity))
-        }
-        _ => {
-            let _ = clear_cached_session(&state.cache_paths);
-            if let Ok(mut current) = state.profile.lock() {
-                *current = None;
-            }
-            Ok(json!({
-                "authenticated": false,
-                "user": null,
-            }))
-        }
-    }
+    Ok(profile_value(&identity))
 }
 
 #[tauri::command]
@@ -984,18 +973,15 @@ async fn desktop_login(
     .await?;
 
     let profile = fetch_desktop_profile(&state.website, &state.website_url).await?;
-    if profile
-        .get("authenticated")
-        .and_then(Value::as_bool)
-        != Some(true)
-    {
+    if profile.get("authenticated").and_then(Value::as_bool) != Some(true) {
         return Err("desktop profile not authenticated after login".to_string());
     }
 
     let identity = identity_from_profile(&profile).ok_or_else(|| {
         format!(
             "invalid desktop profile: {}",
-            serde_json::to_string(&profile).unwrap_or_else(|_| "unserializable_profile".to_string())
+            serde_json::to_string(&profile)
+                .unwrap_or_else(|_| "unserializable_profile".to_string())
         )
     })?;
     let key = load_or_create_key(&state.cache_paths)?;
@@ -1037,7 +1023,13 @@ async fn desktop_logout(state: State<'_, AppState>) -> Result<Value, String> {
         json!({ "session_id": session_id }),
     )
     .await;
-    let _ = website_post(&state.website, &state.website_url, "/api/auth/logout", json!({})).await;
+    let _ = website_post(
+        &state.website,
+        &state.website_url,
+        "/api/auth/logout",
+        json!({}),
+    )
+    .await;
     clear_cached_session(&state.cache_paths)?;
     if let Ok(mut current) = state.profile.lock() {
         *current = None;
@@ -1103,7 +1095,13 @@ async fn disconnect_desktop_session(
         .clone();
 
     if session_id == current_session_id {
-        let _ = website_post(&state.website, &state.website_url, "/api/auth/logout", json!({})).await;
+        let _ = website_post(
+            &state.website,
+            &state.website_url,
+            "/api/auth/logout",
+            json!({}),
+        )
+        .await;
         let _ = clear_cached_session(&state.cache_paths);
         if let Ok(mut current) = state.profile.lock() {
             *current = None;
@@ -1161,10 +1159,7 @@ async fn updater_install(app: tauri::AppHandle) -> Result<Value, String> {
 
     let version = format!("{}", update.version);
     update
-        .download_and_install(
-            |_chunk_length, _content_length| {},
-            || {},
-        )
+        .download_and_install(|_chunk_length, _content_length| {}, || {})
         .await
         .map_err(|e| format!("updater install failed: {e}"))?;
 
@@ -1229,8 +1224,6 @@ pub fn run() {
             set_global_flag,
             set_sector_flag,
             get_x2_status,
-            desktop_login,
-            desktop_logout,
             get_desktop_profile,
             get_admin_desktop_presence,
             disconnect_desktop_session,

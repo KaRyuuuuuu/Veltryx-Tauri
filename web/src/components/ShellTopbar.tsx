@@ -11,7 +11,6 @@ type ShellTopbarProps = {
   onDetachLive: () => void;
   onDetachMap: () => void;
   onConnectToggle: () => void;
-  onLogout: () => void;
 };
 
 export function ShellTopbar({
@@ -24,7 +23,6 @@ export function ShellTopbar({
   onDetachLive,
   onDetachMap,
   onConnectToggle,
-  onLogout,
 }: ShellTopbarProps) {
   return (
     <header className="app-topbar">
@@ -50,9 +48,6 @@ export function ShellTopbar({
             {busy ? "Working..." : connected ? "Disconnect X2" : "Connect X2"}
           </button>
         ) : null}
-        <button className="ghost-button" onClick={onLogout}>
-          Logout
-        </button>
       </div>
     </header>
   );

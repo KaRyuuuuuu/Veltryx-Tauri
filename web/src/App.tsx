@@ -5,7 +5,6 @@ import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 import { AppErrorBoundary } from "./components/AppErrorBoundary";
-import { LoginScreen } from "./components/LoginScreen";
 import { PageHero } from "./components/PageHero";
 import { ShellSidebar } from "./components/ShellSidebar";
 import { ShellTopbar } from "./components/ShellTopbar";
@@ -48,7 +47,6 @@ import {
 
 
 function AppShell() {
-  const LOGIN_HANDOFF_MS = 280;
   const detachedPanel = getDetachedPanel();
   const isDetachedWindow = detachedPanel !== null;
   const [status, setStatus] = useState<StatusResponse>({ connected: false, state: "disconnected" });
@@ -59,9 +57,6 @@ function AppShell() {
   const [busy, setBusy] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
-  const [authError, setAuthError] = useState("");
-  const [login, setLogin] = useState("");
-  const [password, setPassword] = useState("");
   const [page, setPage] = useState<PageId>(detachedPanel ?? "viewer-home");
   const [adminPresence, setAdminPresence] = useState<AdminPresenceResponse | null>(null);
   const [tmsConfig, setTmsConfig] = useState<TmsScreenConfig | null>(null);
@@ -73,17 +68,15 @@ function AppShell() {
     sendLog: [],
   });
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({});
-  const [loginHandoff, setLoginHandoff] = useState(false);
 
   async function bootstrapProfile() {
     const startedAt = Date.now();
     try {
       const data = await invoke<DesktopProfileResponse>("bootstrap_desktop_session");
       setProfile(sanitizeProfile(data));
-      setAuthError("");
     } catch (err) {
       setProfile({ authenticated: false, user: null });
-      setAuthError(String(err));
+      setError(String(err));
     } finally {
       const remaining = Math.max(0, STARTUP_MASK_MS - (Date.now() - startedAt));
       if (remaining > 0) {
@@ -262,44 +255,6 @@ function AppShell() {
     }
     void refreshAdminPresence();
   }, [detachedPanel, page, profile?.authenticated, profile?.user?.role]);
-
-  async function handleLogin(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setBusy(true);
-    setAuthError("");
-    try {
-      const data = await invoke<DesktopProfileResponse>("desktop_login", {
-        payload: { login, password },
-      });
-      setProfile(sanitizeProfile(data));
-      setPassword("");
-      setPage(findDefaultPage(data, navItems));
-      await refreshTelemetry();
-      await refreshLiveTiming();
-      await refreshAdminPresence();
-      await refreshTmsConfig();
-      setLoginHandoff(true);
-      await new Promise((resolve) => window.setTimeout(resolve, LOGIN_HANDOFF_MS));
-    } catch (err) {
-      setAuthError(String(err));
-    } finally {
-      setLoginHandoff(false);
-      setBusy(false);
-    }
-  }
-
-  async function handleLogout() {
-    setBusy(true);
-    try {
-      await invoke("desktop_logout");
-      setProfile({ authenticated: false, user: null });
-      setPage("viewer-home");
-    } catch (err) {
-      setAuthError(String(err));
-    } finally {
-      setBusy(false);
-    }
-  }
 
   async function handleDisconnectDesktopSession(sessionId: string) {
     setBusy(true);
@@ -791,7 +746,7 @@ function AppShell() {
     })();
   }, [raceLinks, tmsConfig?.testCanId, tmsLeaderboard, tmsState, tmsStatus.sending]);
 
-  const stage = booting ? "boot" : loginHandoff ? "handoff" : !profile?.authenticated || !user ? "login" : "workspace";
+  const stage = booting ? "boot" : "workspace";
 
   const workspaceContent =
     user ? (
@@ -814,7 +769,6 @@ function AppShell() {
           onDetachLive={() => void handleDetachWindow("viewer-live")}
           onDetachMap={() => void handleDetachWindow("viewer-map")}
           onConnectToggle={handleConnectToggle}
-          onLogout={handleLogout}
         />
       ) : null}
 
@@ -898,27 +852,6 @@ function AppShell() {
   return (
     <AnimatePresence mode="wait">
       {stage === "boot" ? <StartupScreen key="boot" shellTone={shellTone} /> : null}
-      {stage === "handoff" ? (
-        <StartupScreen
-          key="handoff"
-          shellTone={shellTone}
-          title="Access granted"
-          subtitle="Opening your workspace"
-        />
-      ) : null}
-      {stage === "login" ? (
-        <LoginScreen
-          key="login"
-          shellTone={shellTone}
-          busy={busy}
-          authError={authError}
-          login={login}
-          password={password}
-          setLogin={setLogin}
-          setPassword={setPassword}
-          handleLogin={handleLogin}
-        />
-      ) : null}
       {stage === "workspace" ? workspaceContent : null}
     </AnimatePresence>
   );
