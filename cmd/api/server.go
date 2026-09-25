@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"slices"
 	"sort"
+	"sync"
 	"time"
 
 	"veltryx/internal/domain/models"
@@ -36,6 +37,110 @@ type sessionStoreAPI interface {
 	Validate(sessionID, deviceID, lastKnownUser string) (desktopsession.Record, bool, string)
 	List() []desktopsession.Record
 	Delete(sessionID string)
+}
+
+const (
+	sectorGreenFlag     = 5
+	sectorClearFlag     = 0
+	sectorAutoClearWait = 15 * time.Second
+)
+
+type sectorAutoClearScheduler struct {
+	client   x2API
+	delay    time.Duration
+	clear    func(sectorID int) error
+	mu       sync.Mutex
+	versions map[int]uint64
+}
+
+func newSectorAutoClearScheduler(client x2API, delay time.Duration, clear func(sectorID int) error) *sectorAutoClearScheduler {
+	return &sectorAutoClearScheduler{
+		client:   client,
+		delay:    delay,
+		clear:    clear,
+		versions: make(map[int]uint64),
+	}
+}
+
+func (s *sectorAutoClearScheduler) Record(sectorID, flag int) {
+	s.mu.Lock()
+	s.versions[sectorID]++
+	version := s.versions[sectorID]
+	s.mu.Unlock()
+
+	if flag != sectorGreenFlag {
+		return
+	}
+
+	time.AfterFunc(s.delay, func() {
+		s.mu.Lock()
+		if s.versions[sectorID] != version {
+			s.mu.Unlock()
+			return
+		}
+		s.mu.Unlock()
+
+		snapshot := s.client.Snapshot()
+		if previousSectorIsYellow(snapshot, sectorID) {
+			return
+		}
+
+		if err := s.clear(sectorID); err == nil {
+			s.mu.Lock()
+			if s.versions[sectorID] == version {
+				s.versions[sectorID]++
+			}
+			s.mu.Unlock()
+		}
+	})
+}
+
+func previousSectorIsYellow(snapshot x2.Snapshot, sectorID int) bool {
+	orderedIDs := make([]int, 0)
+	if snapshot.Track != nil {
+		for _, sector := range snapshot.Track.Sectors {
+			if sector.ID > 0 {
+				orderedIDs = append(orderedIDs, sector.ID)
+			}
+		}
+	}
+	if len(orderedIDs) == 0 {
+		for _, sector := range snapshot.Sectors {
+			if sector.ID > 0 {
+				orderedIDs = append(orderedIDs, sector.ID)
+			}
+		}
+		sort.Ints(orderedIDs)
+	}
+	if len(orderedIDs) < 2 {
+		return false
+	}
+
+	previousID := 0
+	for index, id := range orderedIDs {
+		if id == sectorID {
+			previousID = orderedIDs[(index+len(orderedIDs)-1)%len(orderedIDs)]
+			break
+		}
+	}
+	if previousID == 0 {
+		return false
+	}
+	for _, sector := range snapshot.Sectors {
+		if sector.ID == previousID {
+			return isYellowSectorFlag(sector.Flag)
+		}
+	}
+	return false
+}
+
+func isYellowSectorFlag(flag int) bool {
+	switch flag {
+	case 2, 3, 32, 33, 34:
+		return true
+	default:
+		return false
+	}
 }
 
 func newAPIMux(client x2API, liveClient liveTimingAPI, sessionStore sessionStoreAPI) *http.ServeMux {
@@ -105,6 +210,22 @@ func newAPIMux(client x2API, liveClient liveTimingAPI, sessionStore sessionStore
 			return err
 		}
 		return fn()
+	}
+
+	setSectorFlag := func(sectorID, flag int) error {
+		return withX2Retry(func() error {
+			return client.SetSectorFlag(sectorID, flag)
+		})
+	}
+	autoClearSectors := newSectorAutoClearScheduler(client, sectorAutoClearWait, func(sectorID int) error {
+		return setSectorFlag(sectorID, sectorClearFlag)
+	})
+	applySectorFlag := func(sectorID, flag int) error {
+		if err := setSectorFlag(sectorID, flag); err != nil {
+			return err
+		}
+		autoClearSectors.Record(sectorID, flag)
+		return nil
 	}
 
 	withPermission := func(permission string, next http.HandlerFunc) http.HandlerFunc {
@@ -475,7 +596,7 @@ func newAPIMux(client x2API, liveClient liveTimingAPI, sessionStore sessionStore
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "missing_sector"})
 			return
 		}
-		if err := client.SetSectorFlag(req.SectorID, req.Flag); err != nil {
+		if err := applySectorFlag(req.SectorID, req.Flag); err != nil {
 			writeJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": err.Error()})
 			return
 		}
@@ -624,7 +745,7 @@ func newAPIMux(client x2API, liveClient liveTimingAPI, sessionStore sessionStore
 			return
 		}
 		fmt.Printf("[streamdeck] /sector/flag sector=%d flag=%d remote=%s\n", *sectorID, *req.Flag, r.RemoteAddr)
-		if err := withX2Retry(func() error { return client.SetSectorFlag(*sectorID, *req.Flag) }); err != nil {
+		if err := applySectorFlag(*sectorID, *req.Flag); err != nil {
 			fmt.Printf("[streamdeck] /sector/flag error=%v state=%s sector=%d flag=%d\n", err, client.State(), *sectorID, *req.Flag)
 			writeJSON(w, http.StatusBadGateway, map[string]any{
 				"ok":       false,

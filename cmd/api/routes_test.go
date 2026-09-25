@@ -390,3 +390,56 @@ func TestRoutes_StreamDeckSectorsFallbackFromTrack(t *testing.T) {
 		t.Fatalf("expected track order sectors from fallback, got %+v", payload)
 	}
 }
+
+func TestSectorGreenAutoClear(t *testing.T) {
+	mockX2 := &mockX2Client{
+		snapshot: x2.Snapshot{
+			Track:   &models.TrackConfiguration{Sectors: []models.TrackSector{{ID: 1}, {ID: 2}}},
+			Sectors: []models.SectorState{{ID: 1, Flag: 0}, {ID: 2, Flag: sectorGreenFlag}},
+		},
+	}
+	scheduler := newSectorAutoClearScheduler(mockX2, 10*time.Millisecond, func(sectorID int) error {
+		return mockX2.SetSectorFlag(sectorID, sectorClearFlag)
+	})
+
+	scheduler.Record(2, sectorGreenFlag)
+	time.Sleep(40 * time.Millisecond)
+
+	if mockX2.sectorFlagCalls != 1 || mockX2.lastSectorID != 2 || mockX2.lastSectorFlag != sectorClearFlag {
+		t.Fatalf("expected sector 2 auto-clear, calls=%d sector=%d flag=%d", mockX2.sectorFlagCalls, mockX2.lastSectorID, mockX2.lastSectorFlag)
+	}
+}
+
+func TestSectorGreenAutoClearKeepsGreenWhenPreviousSectorIsYellow(t *testing.T) {
+	mockX2 := &mockX2Client{
+		snapshot: x2.Snapshot{
+			Track:   &models.TrackConfiguration{Sectors: []models.TrackSector{{ID: 1}, {ID: 2}}},
+			Sectors: []models.SectorState{{ID: 1, Flag: 2}, {ID: 2, Flag: sectorGreenFlag}},
+		},
+	}
+	scheduler := newSectorAutoClearScheduler(mockX2, 10*time.Millisecond, func(sectorID int) error {
+		return mockX2.SetSectorFlag(sectorID, sectorClearFlag)
+	})
+
+	scheduler.Record(2, sectorGreenFlag)
+	time.Sleep(40 * time.Millisecond)
+
+	if mockX2.sectorFlagCalls != 0 {
+		t.Fatalf("expected no auto-clear while previous sector is yellow, got %d calls", mockX2.sectorFlagCalls)
+	}
+}
+
+func TestSectorGreenAutoClearIsCancelledByNewSectorFlag(t *testing.T) {
+	mockX2 := &mockX2Client{}
+	scheduler := newSectorAutoClearScheduler(mockX2, 10*time.Millisecond, func(sectorID int) error {
+		return mockX2.SetSectorFlag(sectorID, sectorClearFlag)
+	})
+
+	scheduler.Record(2, sectorGreenFlag)
+	scheduler.Record(2, 2)
+	time.Sleep(40 * time.Millisecond)
+
+	if mockX2.sectorFlagCalls != 0 {
+		t.Fatalf("expected new sector flag to cancel auto-clear, got %d calls", mockX2.sectorFlagCalls)
+	}
+}
