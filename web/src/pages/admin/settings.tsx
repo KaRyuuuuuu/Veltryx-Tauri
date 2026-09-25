@@ -62,6 +62,10 @@ export default function AdminSettingsPage({ adminPermissions }: WorkspacePagePro
             <strong>veltryx.karyuu.be</strong>
           </div>
           <div className="stack-row">
+            <span>X2 / RIS configuration</span>
+            <strong>%APPDATA%\veltryx\veltryx.env</strong>
+          </div>
+          <div className="stack-row">
             <span>Updater state</span>
             <strong>{updaterState}</strong>
           </div>

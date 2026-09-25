@@ -15,8 +15,13 @@ import (
 func main() {
 	loadLocalEnv()
 
-	client := x2.NewClient("192.168.103.199", "admin", "admin", "X2Link API test")
-	liveClient := livetiming.NewClient("192.168.103.35:2058")
+	client := x2.NewClient(
+		envValue("VELTRYX_X2_HOST", "192.168.103.198"),
+		envValue("VELTRYX_X2_USER", "admin"),
+		envValue("VELTRYX_X2_PASSWORD", "admin"),
+		envValue("VELTRYX_X2_CLIENT_NAME", "Veltryx Control"),
+	)
+	liveClient := livetiming.NewClient(envValue("VELTRYX_RIS_ADDRESS", "192.168.103.35:2058"))
 	sessionStore := desktopsession.NewStore()
 
 	liveClient.Start()
@@ -82,8 +87,44 @@ func permissionsFromHeader(raw string) []string {
 }
 
 func loadLocalEnv() {
+	ensureRuntimeConfig()
+	loadDotEnvFile(runtimeConfigPath())
 	loadDotEnvFile(".env")
 	loadDotEnvFile(filepath.Join("..", ".env"))
+}
+
+func envValue(key, fallback string) string {
+	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+		return value
+	}
+	return fallback
+}
+
+func runtimeConfigPath() string {
+	root, err := os.UserConfigDir()
+	if err != nil {
+		return "veltryx.env"
+	}
+	return filepath.Join(root, "veltryx", "veltryx.env")
+}
+
+func ensureRuntimeConfig() {
+	path := runtimeConfigPath()
+	if _, err := os.Stat(path); err == nil {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return
+	}
+	const defaults = `# Veltryx Control local configuration.
+# This file is preserved when the application is updated.
+VELTRYX_X2_HOST=192.168.103.198
+VELTRYX_X2_USER=admin
+VELTRYX_X2_PASSWORD=admin
+VELTRYX_X2_CLIENT_NAME=Veltryx Control
+VELTRYX_RIS_ADDRESS=192.168.103.35:2058
+`
+	_ = os.WriteFile(path, []byte(defaults), 0o600)
 }
 
 func loadDotEnvFile(path string) {
